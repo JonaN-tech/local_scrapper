@@ -10,7 +10,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": false,
-    "noEmitHelpers": true
+    "allowImportingTsExtensions": false
   },
   "include": [
     "src/server/**/*",
