@@ -36,8 +36,6 @@ export class RedditDiscoveryRunner {
     // Parse window string to days
     const days = this.parseWindow(request.window);
     const timeWindow = TimeWindow.createTimeWindow(days);
-    const startAt = timeWindow.from.toISOString();
-    const endAt = timeWindow.to.toISOString();
 
     try {
       // Create run record in Supabase (if DB enabled)
@@ -47,9 +45,6 @@ export class RedditDiscoveryRunner {
           .insert({
             mode: request.source === 'schedule' ? 'scheduled' : 'manual',
             name: request.source === 'schedule' ? 'Scheduled Reddit Scan' : 'Manual Reddit Scan',
-            time_window: request.window,
-            start_at: startAt,
-            end_at: endAt,
             status: 'running',
             platform_stats: { reddit: 0 },
           })
