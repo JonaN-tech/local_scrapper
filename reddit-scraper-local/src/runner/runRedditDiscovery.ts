@@ -50,7 +50,6 @@ export class RedditDiscoveryRunner {
           end_at: timeWindow.to.toISOString(),
           time_window_type: request.window,
           platforms_status: { reddit: 'running' },
-          keywords_status: {},
           subreddits: request.subreddits || [],
           total_results_count: 0,
         };
