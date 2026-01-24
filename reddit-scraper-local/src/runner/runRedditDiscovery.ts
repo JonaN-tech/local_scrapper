@@ -41,17 +41,18 @@ export class RedditDiscoveryRunner {
       // Create run record in Supabase (if DB enabled)
       if (isDbEnabled && supabase) {
         const runPayload = {
-          mode: request.source === 'schedule' ? 'scheduled' : 'manual',
           name: request.source === 'schedule'
             ? 'Daily KiloCode Discovery (Local Scrapper)'
             : 'Manual Reddit Discovery',
-          time_window_type: request.window,
+          mode: request.source === 'schedule' ? 'scheduled' : 'manual',
+          status: 'running',
           start_at: timeWindow.from.toISOString(),
           end_at: timeWindow.to.toISOString(),
-          status: 'running',
-          total_results_count: 0,
+          time_window_type: request.window,
           platforms_status: { reddit: 'running' },
+          keywords_status: {},
           subreddits: request.subreddits || [],
+          total_results_count: 0,
         };
 
         console.log(`[RedditDiscoveryRunner] Creating run record...`);
