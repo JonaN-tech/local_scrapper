@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "module": "ESNext",
+    "target": "ES2022",
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/server/**/*",
+    "src/runner/**/*",
+    "src/scraper/**/*",
+    "src/utils/**/*",
+    "src/core/**/*",
+    "src/supabase.ts"
+  ]
+}

@@ -4,11 +4,10 @@
   "description": "Local Reddit scraper service - runs as HTTP server, inserts results to Supabase",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/server/index.ts",
-    "dev:client": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "scrape": "tsx src/cli.ts"
+  "dev": "tsx src/server/index.ts",
+  "build:server": "tsc -p tsconfig.server.json",
+  "start": "node dist/server/index.js",
+  "scrape": "tsx src/cli.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
