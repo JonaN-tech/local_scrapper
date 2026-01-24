@@ -182,6 +182,11 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Vercel health check
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`[Server] Reddit Scraper Service running on http://localhost:${PORT}`);
