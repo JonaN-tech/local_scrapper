@@ -51,7 +51,6 @@ export class RedditDiscoveryRunner {
           status: 'running',
           total_results_count: 0,
           platforms_status: { reddit: 'running' },
-          keywords_status: {},
           subreddits: request.subreddits || [],
         };
 
@@ -67,7 +66,7 @@ export class RedditDiscoveryRunner {
           console.error(`[RedditDiscoveryRunner] Error details:`, JSON.stringify(error));
         } else {
           runId = run.id;
-          console.log(`[RedditDiscoveryRunner] Run created successfully: ${runId}`);
+          console.log(`[RedditDiscoveryRunner] Run created: ${runId}`);
         }
       } else {
         console.log(`[RedditDiscoveryRunner] DB disabled, running in mock mode`);
@@ -94,7 +93,7 @@ export class RedditDiscoveryRunner {
       if (isDbEnabled && supabase && runId && posts.length > 0) {
         console.log(`[RedditDiscoveryRunner] Inserting ${posts.length} posts into normalized_items...`);
         const insertedCount = await this.insertPosts(runId, posts);
-        console.log(`[RedditDiscoveryRunner] Posts inserted: ${insertedCount}`);
+        console.log(`[RedditDiscoveryRunner] Inserted ${insertedCount} items into normalized_items`);
       } else if (!runId && isDbEnabled) {
         console.log(`[RedditDiscoveryRunner] Skipping post insertion (no runId)`);
       }
@@ -115,7 +114,7 @@ export class RedditDiscoveryRunner {
         if (updateError) {
           console.error(`[RedditDiscoveryRunner] Run update failed:`, updateError.message);
         } else {
-          console.log(`[RedditDiscoveryRunner] Run ${runId} updated to completed`);
+          console.log(`[RedditDiscoveryRunner] Run completed`);
         }
       }
 
