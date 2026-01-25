@@ -2,6 +2,7 @@ import { RedditScraperLocal } from '../scraper/RedditScraperLocal';
 import { TimeWindow } from '../utils/timeWindow';
 import { NormalizedPost } from '../core/NormalizedPost';
 import { supabase, isDbEnabled } from '../supabase';
+import { createHash } from 'crypto';
 
 export interface RedditDiscoveryRequest {
   source: 'manual' | 'schedule';
@@ -226,7 +227,7 @@ export class RedditDiscoveryRunner {
           const subredditRaw = post.raw?.subreddit || post.sourceContext.replace('r/', '');
           const subreddit = String(subredditRaw);
           const sourceId = post.id; // Reddit post ID
-          const contentHash = require('crypto').createHash('md5').update(post.content || '').digest('hex');
+          const contentHash = createHash('md5').update(post.content || '').digest('hex');
           const dedupKey = `reddit_${sourceId}`;
           
           const item = {
