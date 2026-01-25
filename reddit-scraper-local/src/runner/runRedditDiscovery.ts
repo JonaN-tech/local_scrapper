@@ -214,82 +214,37 @@ export class RedditDiscoveryRunner {
   private async insertPosts(runId: string, posts: NormalizedPost[]): Promise<number> {
     if (!supabase || posts.length === 0) return 0;
 
-    console.log(`[RedditDiscoveryRunner] Inserting ${posts.length} items...`);
+    console.log(`[RedditDiscoveryRunner] Inserting ${posts.length} items into normalized_items...`);
     
-    // Strategy 1: Try with all fields (full schema)
-    let items: any[] = posts.map((post) => ({
+    // Match your EXACT database schema for normalized_items
+    const items = posts.map((post) => ({
       run_id: runId,
-      platform: 'reddit',
-      subreddit: post.raw?.subreddit || post.sourceContext.replace('r/', ''),
+      platform: 'reddit' as const,
+      source: 'local_scraper',
       title: post.title,
       content: post.content.substring(0, 10000),
-      url: post.url,
       author: post.author || null,
+      url: post.url,
       created_at: post.createdAt.toISOString(),
-      keywords_matched: post.keywordsMatched,
-      score: post.raw?.score as number | undefined,
-      num_comments: post.raw?.numComments as number | undefined,
+      subreddit: post.raw?.subreddit || post.sourceContext.replace('r/', ''),
+      score: post.raw?.score || null,
     }));
 
-    let { data, error } = await supabase
+    const { data, error } = await supabase
       .from('normalized_items')
       .insert(items)
       .select('id');
 
-    // Strategy 2: If any column not found, try without optional metadata columns
-    if (error && error.code === 'PGRST204') {
-      console.warn(`[RedditDiscoveryRunner] Column not found (${error.message}), retrying with minimal schema...`);
-      
-      items = posts.map((post) => ({
-        run_id: runId,
-        platform: 'reddit',
-        subreddit: post.raw?.subreddit || post.sourceContext.replace('r/', ''),
-        title: post.title,
-        content: post.content.substring(0, 10000),
-        url: post.url,
-        author: post.author || null,
-        created_at: post.createdAt.toISOString(),
-      }));
-      
-      const retry = await supabase
-        .from('normalized_items')
-        .insert(items)
-        .select('id');
-      
-      data = retry.data;
-      error = retry.error;
-    }
-
-    // Strategy 3: If still failing, try with absolute minimum fields only
-    if (error && error.code === 'PGRST204') {
-      console.warn(`[RedditDiscoveryRunner] Still failing, trying with minimal required fields only...`);
-      
-      items = posts.map((post) => ({
-        run_id: runId,
-        platform: 'reddit',
-        title: post.title,
-        url: post.url,
-        created_at: post.createdAt.toISOString(),
-      }));
-      
-      const retry = await supabase
-        .from('normalized_items')
-        .insert(items)
-        .select('id');
-      
-      data = retry.data;
-      error = retry.error;
-    }
-
     if (error) {
-      console.error(`[RedditDiscoveryRunner] Failed to insert posts after all retries:`, error.message);
+      console.error(`[RedditDiscoveryRunner] Failed to insert posts:`, error.message);
+      console.error(`[RedditDiscoveryRunner] Error code:`, error.code);
       console.error(`[RedditDiscoveryRunner] Error details:`, JSON.stringify(error));
-      console.error(`[RedditDiscoveryRunner] Your schema may be incompatible. Required columns: run_id, platform, title, url, created_at`);
+      console.error(`[RedditDiscoveryRunner] Sample item structure:`, JSON.stringify(items[0], null, 2));
       return 0;
     }
 
     const insertedCount = data?.length || 0;
-    console.log(`[RedditDiscoveryRunner] ✅ Successfully inserted ${insertedCount} items`);
+    console.log(`[RedditDiscoveryRunner] ✅ Successfully inserted ${insertedCount} items into normalized_items`);
     return insertedCount;
   }
 
