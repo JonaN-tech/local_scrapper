@@ -214,8 +214,10 @@ export class RedditDiscoveryRunner {
   private async insertPosts(runId: string, posts: NormalizedPost[]): Promise<number> {
     if (!supabase || posts.length === 0) return 0;
 
-    // Try with keywords_matched first (new schema)
-    const itemsWithKeywords = posts.map((post) => ({
+    console.log(`[RedditDiscoveryRunner] Inserting ${posts.length} items...`);
+    
+    // Strategy 1: Try with all fields (full schema)
+    let items: any[] = posts.map((post) => ({
       run_id: runId,
       platform: 'reddit',
       subreddit: post.raw?.subreddit || post.sourceContext.replace('r/', ''),
@@ -229,17 +231,16 @@ export class RedditDiscoveryRunner {
       num_comments: post.raw?.numComments as number | undefined,
     }));
 
-    console.log(`[RedditDiscoveryRunner] Inserting ${itemsWithKeywords.length} items...`);
     let { data, error } = await supabase
       .from('normalized_items')
-      .insert(itemsWithKeywords)
+      .insert(items)
       .select('id');
 
-    // If keywords_matched column doesn't exist, retry without it
-    if (error && error.message?.includes('keywords_matched')) {
-      console.warn(`[RedditDiscoveryRunner] keywords_matched column not found, retrying without it...`);
+    // Strategy 2: If any column not found, try without optional metadata columns
+    if (error && error.code === 'PGRST204') {
+      console.warn(`[RedditDiscoveryRunner] Column not found (${error.message}), retrying with minimal schema...`);
       
-      const itemsWithoutKeywords = posts.map((post) => ({
+      items = posts.map((post) => ({
         run_id: runId,
         platform: 'reddit',
         subreddit: post.raw?.subreddit || post.sourceContext.replace('r/', ''),
@@ -248,13 +249,32 @@ export class RedditDiscoveryRunner {
         url: post.url,
         author: post.author || null,
         created_at: post.createdAt.toISOString(),
-        score: post.raw?.score as number | undefined,
-        num_comments: post.raw?.numComments as number | undefined,
       }));
       
       const retry = await supabase
         .from('normalized_items')
-        .insert(itemsWithoutKeywords)
+        .insert(items)
+        .select('id');
+      
+      data = retry.data;
+      error = retry.error;
+    }
+
+    // Strategy 3: If still failing, try with absolute minimum fields only
+    if (error && error.code === 'PGRST204') {
+      console.warn(`[RedditDiscoveryRunner] Still failing, trying with minimal required fields only...`);
+      
+      items = posts.map((post) => ({
+        run_id: runId,
+        platform: 'reddit',
+        title: post.title,
+        url: post.url,
+        created_at: post.createdAt.toISOString(),
+      }));
+      
+      const retry = await supabase
+        .from('normalized_items')
+        .insert(items)
         .select('id');
       
       data = retry.data;
@@ -262,8 +282,9 @@ export class RedditDiscoveryRunner {
     }
 
     if (error) {
-      console.error(`[RedditDiscoveryRunner] Failed to insert posts:`, error.message);
+      console.error(`[RedditDiscoveryRunner] Failed to insert posts after all retries:`, error.message);
       console.error(`[RedditDiscoveryRunner] Error details:`, JSON.stringify(error));
+      console.error(`[RedditDiscoveryRunner] Your schema may be incompatible. Required columns: run_id, platform, title, url, created_at`);
       return 0;
     }
 
