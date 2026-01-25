@@ -40,7 +40,8 @@ export class RedditDiscoveryRunner {
     try {
       // Create run record in Supabase (if DB enabled)
       if (isDbEnabled && supabase) {
-        const runPayload = {
+        // Try with platforms_status first (new schema)
+        let runPayload: any = {
           name: request.source === 'schedule'
             ? 'Daily KiloCode Discovery (Local Scrapper)'
             : 'Manual Reddit Discovery',
@@ -54,19 +55,37 @@ export class RedditDiscoveryRunner {
           total_results_count: 0,
         };
 
-        console.log(`[RedditDiscoveryRunner] Creating run record...`);
-        const { data: run, error } = await supabase
+        console.log(`[RedditDiscoveryRunner] Creating run record (with platforms_status)...`);
+        let { data: run, error } = await supabase
           .from('runs')
           .insert(runPayload)
           .select()
           .single();
+
+        // If platforms_status column doesn't exist, retry without it (backward compatibility)
+        if (error && error.message?.includes('platforms_status')) {
+          console.warn(`[RedditDiscoveryRunner] platforms_status column not found, retrying without it...`);
+          
+          // Remove platforms_status and retry
+          const { platforms_status, ...payloadWithoutPlatforms } = runPayload;
+          runPayload = payloadWithoutPlatforms;
+          
+          const retry = await supabase
+            .from('runs')
+            .insert(runPayload)
+            .select()
+            .single();
+          
+          run = retry.data;
+          error = retry.error;
+        }
 
         if (error) {
           console.error(`[RedditDiscoveryRunner] Run insert failed:`, error.message);
           console.error(`[RedditDiscoveryRunner] Error details:`, JSON.stringify(error));
         } else {
           runId = run.id;
-          console.log(`[RedditDiscoveryRunner] Run created: ${runId}`);
+          console.log(`[RedditDiscoveryRunner] ✅ Run created: ${runId}`);
         }
       } else {
         console.log(`[RedditDiscoveryRunner] DB disabled, running in mock mode`);
@@ -101,20 +120,35 @@ export class RedditDiscoveryRunner {
       // Update run record on completion
       if (isDbEnabled && supabase && runId) {
         console.log(`[RedditDiscoveryRunner] Updating run to completed...`);
-        const { error: updateError } = await supabase
+        
+        // Try with platforms_status first
+        let updatePayload: any = {
+          status: 'completed',
+          total_results_count: posts.length,
+          platforms_status: { reddit: 'completed' },
+          updated_at: new Date().toISOString(),
+        };
+        
+        let { error: updateError } = await supabase
           .from('runs')
-          .update({
-            status: 'completed',
-            total_results_count: posts.length,
-            platforms_status: { reddit: 'completed' },
-            updated_at: new Date().toISOString(),
-          })
+          .update(updatePayload)
           .eq('id', runId);
+
+        // If platforms_status doesn't exist, retry without it
+        if (updateError && updateError.message?.includes('platforms_status')) {
+          console.warn(`[RedditDiscoveryRunner] Retrying update without platforms_status...`);
+          const { platforms_status, ...payloadWithoutPlatforms } = updatePayload;
+          const retry = await supabase
+            .from('runs')
+            .update(payloadWithoutPlatforms)
+            .eq('id', runId);
+          updateError = retry.error;
+        }
 
         if (updateError) {
           console.error(`[RedditDiscoveryRunner] Run update failed:`, updateError.message);
         } else {
-          console.log(`[RedditDiscoveryRunner] Run completed`);
+          console.log(`[RedditDiscoveryRunner] ✅ Run completed`);
         }
       }
 
@@ -135,15 +169,30 @@ export class RedditDiscoveryRunner {
       // Update run record on failure
       if (isDbEnabled && supabase && runId) {
         console.log(`[RedditDiscoveryRunner] Updating run to failed...`);
-        const { error: updateError } = await supabase
+        
+        // Try with platforms_status first
+        let updatePayload: any = {
+          status: 'failed',
+          error_message: error.message,
+          platforms_status: { reddit: 'failed' },
+          updated_at: new Date().toISOString(),
+        };
+        
+        let { error: updateError } = await supabase
           .from('runs')
-          .update({
-            status: 'failed',
-            error_message: error.message,
-            platforms_status: { reddit: 'failed' },
-            updated_at: new Date().toISOString(),
-          })
+          .update(updatePayload)
           .eq('id', runId);
+
+        // If platforms_status doesn't exist, retry without it
+        if (updateError && updateError.message?.includes('platforms_status')) {
+          console.warn(`[RedditDiscoveryRunner] Retrying update without platforms_status...`);
+          const { platforms_status, ...payloadWithoutPlatforms } = updatePayload;
+          const retry = await supabase
+            .from('runs')
+            .update(payloadWithoutPlatforms)
+            .eq('id', runId);
+          updateError = retry.error;
+        }
 
         if (updateError) {
           console.error(`[RedditDiscoveryRunner] Failed to update run status:`, updateError.message);
