@@ -216,36 +216,67 @@ export class RedditDiscoveryRunner {
 
     console.log(`[RedditDiscoveryRunner] Inserting ${posts.length} items into normalized_items...`);
     
-    // Match your EXACT database schema for normalized_items
-    const items = posts.map((post) => ({
-      run_id: runId,
-      platform: 'reddit' as const,
-      source: 'local_scraper',
-      title: post.title,
-      content: post.content.substring(0, 10000),
-      author: post.author || null,
-      url: post.url,
-      created_at: post.createdAt.toISOString(),
-      subreddit: post.raw?.subreddit || post.sourceContext.replace('r/', ''),
-      score: post.raw?.score || null,
-    }));
+    try {
+      // Insert one by one to match ACTUAL schema
+      let successCount = 0;
+      
+      for (const post of posts) {
+        try {
+          // Match ACTUAL database schema
+          const subredditRaw = post.raw?.subreddit || post.sourceContext.replace('r/', '');
+          const subreddit = String(subredditRaw);
+          const sourceId = post.id; // Reddit post ID
+          const contentHash = require('crypto').createHash('md5').update(post.content || '').digest('hex');
+          const dedupKey = `reddit_${sourceId}`;
+          
+          const item = {
+            run_id: runId,
+            source_platform: 'reddit', // USER-DEFINED enum type
+            source_id: sourceId,
+            title: post.title || '',
+            content: (post.content || '').substring(0, 10000),
+            author: post.author || null,
+            url: post.url,
+            created_at: post.createdAt.toISOString(),
+            content_hash: contentHash,
+            dedup_key: dedupKey,
+            origin: 'local_scraper',
+            metadata: {
+              subreddit: subreddit,
+              score: post.raw?.score || 0,
+              num_comments: post.raw?.numComments || 0,
+            },
+            matched_keywords: post.keywordsMatched || [],
+          };
 
-    const { data, error } = await supabase
-      .from('normalized_items')
-      .insert(items)
-      .select('id');
+          const { error: insertError } = await supabase
+            .from('normalized_items')
+            .insert(item);
+          
+          if (!insertError) {
+            successCount++;
+          } else {
+            console.error(`[RedditDiscoveryRunner] Failed to insert post ${sourceId}:`, insertError.message);
+            if (successCount === 0) {
+              // Log first error details for debugging
+              console.error(`[RedditDiscoveryRunner] Error details:`, JSON.stringify(insertError));
+              console.error(`[RedditDiscoveryRunner] Sample item:`, JSON.stringify(item, null, 2));
+            }
+          }
+        } catch (singleError) {
+          console.error(`[RedditDiscoveryRunner] Error processing post:`, singleError);
+        }
+      }
+      
+      console.log(`[RedditDiscoveryRunner] ✅ Successfully inserted ${successCount}/${posts.length} items into normalized_items`);
+      return successCount;
 
-    if (error) {
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error('Unknown error');
       console.error(`[RedditDiscoveryRunner] Failed to insert posts:`, error.message);
-      console.error(`[RedditDiscoveryRunner] Error code:`, error.code);
-      console.error(`[RedditDiscoveryRunner] Error details:`, JSON.stringify(error));
-      console.error(`[RedditDiscoveryRunner] Sample item structure:`, JSON.stringify(items[0], null, 2));
+      console.error(`[RedditDiscoveryRunner] Error stack:`, error.stack);
       return 0;
     }
-
-    const insertedCount = data?.length || 0;
-    console.log(`[RedditDiscoveryRunner] ✅ Successfully inserted ${insertedCount} items into normalized_items`);
-    return insertedCount;
   }
 
   /**
