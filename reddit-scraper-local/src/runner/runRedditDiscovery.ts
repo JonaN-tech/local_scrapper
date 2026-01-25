@@ -214,7 +214,8 @@ export class RedditDiscoveryRunner {
   private async insertPosts(runId: string, posts: NormalizedPost[]): Promise<number> {
     if (!supabase || posts.length === 0) return 0;
 
-    const items = posts.map((post) => ({
+    // Try with keywords_matched first (new schema)
+    const itemsWithKeywords = posts.map((post) => ({
       run_id: runId,
       platform: 'reddit',
       subreddit: post.raw?.subreddit || post.sourceContext.replace('r/', ''),
@@ -228,11 +229,37 @@ export class RedditDiscoveryRunner {
       num_comments: post.raw?.numComments as number | undefined,
     }));
 
-    console.log(`[RedditDiscoveryRunner] Inserting ${items.length} items...`);
-    const { data, error } = await supabase
+    console.log(`[RedditDiscoveryRunner] Inserting ${itemsWithKeywords.length} items...`);
+    let { data, error } = await supabase
       .from('normalized_items')
-      .insert(items)
+      .insert(itemsWithKeywords)
       .select('id');
+
+    // If keywords_matched column doesn't exist, retry without it
+    if (error && error.message?.includes('keywords_matched')) {
+      console.warn(`[RedditDiscoveryRunner] keywords_matched column not found, retrying without it...`);
+      
+      const itemsWithoutKeywords = posts.map((post) => ({
+        run_id: runId,
+        platform: 'reddit',
+        subreddit: post.raw?.subreddit || post.sourceContext.replace('r/', ''),
+        title: post.title,
+        content: post.content.substring(0, 10000),
+        url: post.url,
+        author: post.author || null,
+        created_at: post.createdAt.toISOString(),
+        score: post.raw?.score as number | undefined,
+        num_comments: post.raw?.numComments as number | undefined,
+      }));
+      
+      const retry = await supabase
+        .from('normalized_items')
+        .insert(itemsWithoutKeywords)
+        .select('id');
+      
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.error(`[RedditDiscoveryRunner] Failed to insert posts:`, error.message);
@@ -241,7 +268,7 @@ export class RedditDiscoveryRunner {
     }
 
     const insertedCount = data?.length || 0;
-    console.log(`[RedditDiscoveryRunner] Successfully inserted ${insertedCount} items`);
+    console.log(`[RedditDiscoveryRunner] ✅ Successfully inserted ${insertedCount} items`);
     return insertedCount;
   }
 
