@@ -7,6 +7,7 @@ import { createHash } from 'crypto';
 export interface RedditDiscoveryRequest {
   source: 'manual' | 'schedule';
   scheduleId?: string;
+  runId?: string; // Use existing run from Vercel
   keywords: string[];
   subreddits: string[];
   window: string; // e.g., "24h", "7d"
@@ -25,10 +26,11 @@ export class RedditDiscoveryRunner {
    */
   async run(request: RedditDiscoveryRequest): Promise<RedditDiscoveryResult> {
     const startTime = Date.now();
-    let runId: string | null = null;
+    let runId: string | null = request.runId || null;
 
     console.log(`[RedditDiscoveryRunner] Starting discovery`);
     console.log(`[RedditDiscoveryRunner] Source: ${request.source}, ScheduleId: ${request.scheduleId || 'N/A'}`);
+    console.log(`[RedditDiscoveryRunner] RunId: ${runId || 'will create new'}`);
     console.log(`[RedditDiscoveryRunner] Keywords: ${request.keywords.join(', ')}`);
     console.log(`[RedditDiscoveryRunner] Subreddits: ${request.subreddits.join(', ') || 'empty'}`);
     console.log(`[RedditDiscoveryRunner] Window: ${request.window}`);
@@ -39,8 +41,10 @@ export class RedditDiscoveryRunner {
     const timeWindow = TimeWindow.createTimeWindow(days);
 
     try {
-      // Create run record in Supabase (if DB enabled)
-      if (isDbEnabled && supabase) {
+      // Only create run if runId was not provided from Vercel
+      if (!runId && isDbEnabled && supabase) {
+        console.log(`[RedditDiscoveryRunner] No runId provided, creating new run...`);
+
         // Try with platforms_status first (new schema)
         let runPayload: any = {
           name: request.source === 'schedule'
@@ -66,17 +70,17 @@ export class RedditDiscoveryRunner {
         // If platforms_status column doesn't exist, retry without it (backward compatibility)
         if (error && error.message?.includes('platforms_status')) {
           console.warn(`[RedditDiscoveryRunner] platforms_status column not found, retrying without it...`);
-          
+
           // Remove platforms_status and retry
           const { platforms_status, ...payloadWithoutPlatforms } = runPayload;
           runPayload = payloadWithoutPlatforms;
-          
+
           const retry = await supabase
             .from('runs')
             .insert(runPayload)
             .select()
             .single();
-          
+
           run = retry.data;
           error = retry.error;
         }
@@ -88,6 +92,8 @@ export class RedditDiscoveryRunner {
           runId = run.id;
           console.log(`[RedditDiscoveryRunner] ✅ Run created: ${runId}`);
         }
+      } else if (runId && isDbEnabled) {
+        console.log(`[RedditDiscoveryRunner] ✅ Using provided runId from Vercel: ${runId}`);
       } else {
         console.log(`[RedditDiscoveryRunner] DB disabled, running in mock mode`);
       }
@@ -227,7 +233,8 @@ export class RedditDiscoveryRunner {
           const subredditRaw = post.raw?.subreddit || post.sourceContext.replace('r/', '');
           const subreddit = String(subredditRaw);
           const sourceId = post.id; // Reddit post ID
-          const contentHash = createHash('md5').update(post.content || '').digest('hex');
+          // Include source_id to ensure uniqueness even with empty content or cross-posted content
+          const contentHash = createHash('md5').update(`${post.content || ''}|${post.id}`).digest('hex');
           const dedupKey = `reddit_${sourceId}`;
           
           const item = {
