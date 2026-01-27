@@ -28,21 +28,71 @@ export class RedditDiscoveryRunner {
     const startTime = Date.now();
     let runId: string | null = request.runId || null;
 
-    console.log(`[RedditDiscoveryRunner] Starting discovery`);
-    console.log(`[RedditDiscoveryRunner] Source: ${request.source}, ScheduleId: ${request.scheduleId || 'N/A'}`);
-    console.log(`[RedditDiscoveryRunner] RunId: ${runId || 'will create new'}`);
-    console.log(`[RedditDiscoveryRunner] Keywords: ${request.keywords.join(', ')}`);
-    console.log(`[RedditDiscoveryRunner] Subreddits: ${request.subreddits.join(', ') || 'empty'}`);
-    console.log(`[RedditDiscoveryRunner] Window: ${request.window}`);
-    console.log(`[RedditDiscoveryRunner] DB enabled: ${isDbEnabled}`);
+    // Clear start logging with all parameters
+    console.log(`[SCRAPER_START]`);
+    console.log(`[SCRAPER_START] runId=${runId || 'null'}`);
+    console.log(`[SCRAPER_START] scheduleId=${request.scheduleId || 'null'}`);
+    console.log(`[SCRAPER_START] subreddits=[${(request.subreddits || []).join(', ')}]`);
+    console.log(`[SCRAPER_START] keywords=[${(request.keywords || []).join(', ')}]`);
+    console.log(`[SCRAPER_START] window=${request.window}`);
+    console.log(`[SCRAPER_START] dbEnabled=${isDbEnabled}`);
+    console.log(`[SCRAPER_START]`);
+
+    // Validate subreddits - must be provided and non-empty
+    const subreddits = request.subreddits || [];
+    if (subreddits.length === 0) {
+      console.error(`[RedditDiscoveryRunner] ERROR: No subreddits provided in request`);
+      return {
+        runId: null,
+        status: 'failed',
+        postsFound: 0,
+        error: 'No subreddits provided - must specify subreddits in request',
+      };
+    }
+
+    // Validate keywords
+    const keywords = request.keywords || [];
+    if (keywords.length === 0) {
+      console.error(`[RedditDiscoveryRunner] ERROR: No keywords provided in request`);
+      return {
+        runId: null,
+        status: 'failed',
+        postsFound: 0,
+        error: 'No keywords provided - must specify keywords in request',
+      };
+    }
 
     // Parse window string to days
     const days = this.parseWindow(request.window);
     const timeWindow = TimeWindow.createTimeWindow(days);
 
     try {
-      // Only create run if runId was not provided from Vercel
-      if (!runId && isDbEnabled && supabase) {
+      // CRITICAL: Use provided runId, NEVER create new run if runId exists
+      if (runId) {
+        // Validate runId exists in database
+        if (isDbEnabled && supabase) {
+          const { data: existingRun } = await supabase
+            .from('runs')
+            .select('id')
+            .eq('id', runId)
+            .single();
+
+          if (existingRun) {
+            console.log(`[RedditDiscoveryRunner] ✅ Using provided runId: ${runId}`);
+          } else {
+            console.error(`[RedditDiscoveryRunner] ERROR: Provided runId not found in database: ${runId}`);
+            return {
+              runId: null,
+              status: 'failed',
+              postsFound: 0,
+              error: 'Provided runId not found in database',
+            };
+          }
+        } else {
+          console.log(`[RedditDiscoveryRunner] ✅ Using provided runId: ${runId} (DB disabled)`);
+        }
+      } else if (isDbEnabled && supabase) {
+        // Only create run if runId was NOT provided
         console.log(`[RedditDiscoveryRunner] No runId provided, creating new run...`);
 
         // Try with platforms_status first (new schema)
@@ -56,11 +106,11 @@ export class RedditDiscoveryRunner {
           end_at: timeWindow.to.toISOString(),
           time_window_type: request.window,
           platforms_status: { reddit: 'running' },
-          subreddits: request.subreddits || [],
+          subreddits: subreddits,
           total_results_count: 0,
         };
 
-        console.log(`[RedditDiscoveryRunner] Creating run record (with platforms_status)...`);
+        console.log(`[RedditDiscoveryRunner] Creating run record...`);
         let { data: run, error } = await supabase
           .from('runs')
           .insert(runPayload)
@@ -92,10 +142,8 @@ export class RedditDiscoveryRunner {
           runId = run.id;
           console.log(`[RedditDiscoveryRunner] ✅ Run created: ${runId}`);
         }
-      } else if (runId && isDbEnabled) {
-        console.log(`[RedditDiscoveryRunner] ✅ Using provided runId from Vercel: ${runId}`);
       } else {
-        console.log(`[RedditDiscoveryRunner] DB disabled, running in mock mode`);
+        console.log(`[RedditDiscoveryRunner] DB disabled, no runId provided - running in mock mode`);
       }
 
       // If runId is null, we cannot proceed with item insertion
@@ -103,12 +151,13 @@ export class RedditDiscoveryRunner {
         console.warn(`[RedditDiscoveryRunner] No runId obtained, skipping item insertion`);
       }
 
-      // Run the scraper (works regardless of DB status)
+      // Run the scraper with EXACTLY the requested subreddits
       const scraper = new RedditScraperLocal();
-      
-      console.log(`[RedditDiscoveryRunner] Starting Reddit scrape...`);
+
+      console.log(`[RedditDiscoveryRunner] Starting Reddit scrape for ${subreddits.length} subreddits...`);
       const posts = await scraper.fetchPosts({
-        keywords: request.keywords,
+        subreddits: subreddits,  // Use EXACTLY the requested subreddits
+        keywords: keywords,
         timeWindow,
         limit: 50,
       });

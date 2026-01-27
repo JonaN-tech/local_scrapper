@@ -4,6 +4,7 @@ export interface PlatformScraper {
 }
 
 export interface ScrapingParams {
+  subreddits: string[];  // Required - use exactly these subreddits
   keywords: string[];
   timeWindow: {
     from: Date;

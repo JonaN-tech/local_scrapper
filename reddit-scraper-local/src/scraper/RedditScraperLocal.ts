@@ -6,47 +6,13 @@ import { TimeWindow } from '../utils/timeWindow';
  * Reddit Scraper - Direct JSON API
  * FOR LOCAL DEVELOPMENT ONLY
  * This file should NEVER be imported in production builds
+ *
+ * IMPORTANT: Uses EXACTLY the subreddits provided in the request.
+ * No hardcoded lists, no automatic expansion.
  */
 
-// Hard-coded allow list of subreddits - NO scraping outside this list
-const ALLOWED_SUBREDDITS = [
-  'vibecoding',
-  'saasbuild',
-  'AIAssisted',
-  'automation',
-  'AI_Agents',
-  'cursor',
-  'aitoolforU',
-  'NoCodeSaaS',
-  'OnlyAICoding',
-  'StartupSoloFounder',
-  'AI_Tips_Tricks',
-  'DigitalWizards',
-  'ChatGPTCoding',
-  'AskReddit',
-  'nocode',
-  'microsaas',
-  'AiForSmallBusiness',
-  'ClaudeAI',
-  'GenAI4all',
-  'ProductivityApps',
-  'ChatGPTPro',
-  'AIToolTesting',
-  'developersIndia',
-  'developersPak',
-  'Entrepreneur',
-  'marketing',
-  'indiehackers',
-  'AskProgrammers',
-  'LocalLLaMA',
-  'teenagersbutcode',
-  'VibeCodeCamp',
-  'VibeCodeDevs',
-  'VibeCodersNest',
-  'lovable',
-  'n8n',
-  'NextGenAITool'
-];
+// Allowed fallback subreddits for error cases only (deprecated methods only)
+const FALLBACK_SUBREDDITS = ['vibecoding', 'AI_Agents', 'cursor', 'ClaudeAI'];
 
 /**
  * Normalize a keyword for consistent searching
@@ -75,6 +41,13 @@ function deduplicateKeywords(keywords: string[]): string[] {
   });
 }
 
+/**
+ * Clean subreddit name - remove r/ prefix if present
+ */
+function cleanSubredditName(subreddit: string): string {
+  return subreddit.replace(/^r\//i, '').trim();
+}
+
 export class RedditScraperLocal implements PlatformScraper {
   platform: 'reddit' = 'reddit';
   private rateLimiter: HttpRateLimiter;
@@ -85,28 +58,37 @@ export class RedditScraperLocal implements PlatformScraper {
   }
 
   /**
-   * Fetch posts from Reddit using subreddit new feed + local keyword filtering
-   * This is the SAFE strategy: ~30 requests instead of 400+
+   * Fetch posts from Reddit using EXACTLY the requested subreddits
+   * No internal expansion or modification of subreddit list
    */
   async fetchPosts(params: ScrapingParams & { runId?: string }): Promise<NormalizedPost[]> {
-    const { keywords, timeWindow, limit = 50 } = params;
-    
+    const { subreddits, keywords, timeWindow, limit = 50 } = params;
+
+    // Validate subreddits - must be provided
+    if (!subreddits || subreddits.length === 0) {
+      throw new Error('Subreddits list is required - cannot use default list');
+    }
+
+    // Clean subreddit names (remove r/ prefix if present)
+    const targetSubreddits = subreddits.map(cleanSubredditName);
+
     // Normalize and deduplicate keywords
     const uniqueKeywords = deduplicateKeywords(keywords);
-    console.log(`[RedditScraperLocal] Fetching from ${ALLOWED_SUBREDDITS.length} subreddits, filtering by ${uniqueKeywords.length} keywords`);
+
+    console.log(`[RedditScraperLocal] Fetching from ${targetSubreddits.length} subreddits: [${targetSubreddits.join(', ')}]`);
     console.log(`[RedditScraperLocal] Keywords: ${uniqueKeywords.join(', ')}`);
-    
+
     // Reset rate limiter run state
     this.rateLimiter.resetRun();
-    
+
     const allPosts: NormalizedPost[] = [];
     let totalRequests = 0;
     let failedSubreddits: string[] = [];
 
-    // SAFE STRATEGY: One request per subreddit, filter locally
-    for (const subreddit of ALLOWED_SUBREDDITS) {
+    // Process EXACTLY the requested subreddits
+    for (const subreddit of targetSubreddits) {
       const posts = await this.fetchSubredditNew(subreddit, uniqueKeywords, timeWindow, limit);
-      
+
       if (posts.length === 0) {
         // Check if it was a rate limit/block issue
         const stats = this.rateLimiter.getStats();
@@ -114,25 +96,25 @@ export class RedditScraperLocal implements PlatformScraper {
           failedSubreddits.push(subreddit);
         }
       }
-      
+
       allPosts.push(...posts);
       totalRequests++;
-      
+
       // Progress log every 10 requests
-      if (totalRequests % 10 === 0) {
-        console.log(`[RedditScraperLocal] Progress: ${totalRequests}/${ALLOWED_SUBREDDITS.length} subreddits processed`);
+      if (totalRequests % 10 === 0 || totalRequests === targetSubreddits.length) {
+        console.log(`[RedditScraperLocal] Progress: ${totalRequests}/${targetSubreddits.length} subreddits processed`);
       }
     }
-    
+
     const stats = this.rateLimiter.getStats();
     console.log(`[RedditScraperLocal] Run stats: ${totalRequests} requests, ${allPosts.length} posts`);
     if (failedSubreddits.length > 0) {
       console.log(`[RedditScraperLocal] Failed subreddits: ${failedSubreddits.join(', ')}`);
     }
-    
+
     const uniquePosts = this.deduplicateById(allPosts);
     console.log(`[RedditScraperLocal] Found ${uniquePosts.length} unique posts from ${totalRequests} requests`);
-    
+
     return uniquePosts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
@@ -147,26 +129,26 @@ export class RedditScraperLocal implements PlatformScraper {
     limit: number
   ): Promise<NormalizedPost[]> {
     const posts: NormalizedPost[] = [];
-    
+
     // Use /r/{subreddit}/new.json - much simpler and safer than search
     const url = `https://www.reddit.com/r/${subreddit}/new.json?limit=${limit}`;
-    
+
     const response = await this.rateLimiter.request<any>(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json',
       },
     }, subreddit);
-    
+
     if (!response) {
       console.log(`[RedditScraperLocal] No response from r/${subreddit} - rate limited or blocked`);
       return posts;
     }
-    
+
     if (!response?.data?.data?.children) {
       return posts;
     }
-    
+
     let postsInWindow = 0;
     let postsFiltered = 0;
     let matchedCount = 0;
@@ -174,28 +156,28 @@ export class RedditScraperLocal implements PlatformScraper {
     for (const child of response.data.data.children) {
       const post = child.data;
       const postDate = new Date(post.created_utc * 1000);
-      
+
       // Check time window
       if (!TimeWindow.isWithinWindow(postDate, timeWindow.from, timeWindow.to)) {
         postsFiltered++;
         continue;
       }
-      
+
       // Filter deleted/removed posts
       if (post.selftext === '[deleted]' || post.title === '[deleted]' || post.removed_by_category) {
         continue;
       }
-      
+
       // Check if any keyword matches in title (case-insensitive)
       const titleLower = post.title.toLowerCase();
-      const keywordsMatched = keywords.filter(kw => 
+      const keywordsMatched = keywords.filter(kw =>
         titleLower.includes(kw.toLowerCase())
       );
-      
+
       if (keywordsMatched.length === 0) {
         continue; // No keyword match, skip
       }
-      
+
       matchedCount++;
       posts.push({
         id: post.id,
@@ -215,33 +197,35 @@ export class RedditScraperLocal implements PlatformScraper {
       });
       postsInWindow++;
     }
-    
+
     if (postsInWindow > 0) {
       console.log(`[RedditScraperLocal] r/${subreddit}: ${postsInWindow} posts matched keywords`);
     }
-    
+
     return posts;
   }
 
   /**
-   * @deprecated Use fetchPosts instead (uses safer strategy)
+   * @deprecated Use fetchPosts instead with explicit subreddits
    */
   async fetchFromSubreddits(
-    subreddits: string[], 
-    keywords: string[], 
+    subreddits: string[],
+    keywords: string[],
     timeWindow: { from: Date; to: Date }
   ): Promise<NormalizedPost[]> {
-    return this.fetchPosts({ keywords, timeWindow, limit: 50 });
+    return this.fetchPosts({ subreddits, keywords, timeWindow, limit: 50 });
   }
 
   /**
-   * @deprecated Use fetchPosts instead (uses safer strategy)
+   * @deprecated Use fetchPosts instead with explicit subreddits and keywords
    */
   async fetchTrending(timeWindow: { from: Date; to: Date }): Promise<NormalizedPost[]> {
-    return this.fetchPosts({ 
-      keywords: ['ai', 'cursor', 'claude', 'github copilot'], 
-      timeWindow, 
-      limit: 50 
+    // Use fallback subreddits for backward compatibility
+    return this.fetchPosts({
+      subreddits: FALLBACK_SUBREDDITS,
+      keywords: ['ai', 'cursor', 'claude', 'github copilot'],
+      timeWindow,
+      limit: 50
     });
   }
 
