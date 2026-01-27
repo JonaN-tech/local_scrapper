@@ -87,7 +87,11 @@ app.post('/run/reddit', async (req, res) => {
   console.log('[Server] /run/reddit called');
   console.log('[Server] Request body:', JSON.stringify(req.body, null, 2));
 
-  const { source = 'manual', scheduleId, keywords, subreddits = [], window = '7d' } = req.body as RedditDiscoveryRequest;
+  // CRITICAL: Extract runId from request body
+  const { runId, source = 'manual', scheduleId, keywords, subreddits = [], window = '7d' } = req.body as RedditDiscoveryRequest;
+
+  // Log runId to verify it's being received
+  console.log(`[Server] Received runId: ${runId || 'null'}`);
 
   // Validate keywords
   if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
@@ -108,7 +112,9 @@ app.post('/run/reddit', async (req, res) => {
   }
 
   try {
+    // CRITICAL: Pass runId to the request
     const request: RedditDiscoveryRequest = {
+      runId,  // <-- MUST be forwarded
       source,
       scheduleId,
       keywords,
@@ -117,6 +123,7 @@ app.post('/run/reddit', async (req, res) => {
     };
 
     console.log(`[Server] Starting Reddit discovery run`);
+    console.log(`[Server] runId: ${runId || 'will create new'}`);
     console.log(`[Server] Source: ${source}, ScheduleId: ${scheduleId || 'N/A'}`);
     console.log(`[Server] Keywords: ${keywords.join(', ')}`);
     console.log(`[Server] Subreddits: ${subreddits.join(', ') || 'all allowed'}`);
