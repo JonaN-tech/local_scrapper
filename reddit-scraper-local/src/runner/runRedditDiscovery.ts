@@ -227,8 +227,7 @@ export class RedditDiscoveryRunner {
           const subredditRaw = post.raw?.subreddit || post.sourceContext.replace('r/', '');
           const subreddit = String(subredditRaw);
           const sourceId = post.id; // Reddit post ID
-          // Include source_id to ensure uniqueness even with empty content or cross-posted content
-const contentHash = createHash('md5').update(`${post.content || ''}|${post.id}`).digest('hex');
+          const contentHash = createHash('md5').update(post.content || '').digest('hex');
           const dedupKey = `reddit_${sourceId}`;
           
           const item = {
