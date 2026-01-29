@@ -275,16 +275,40 @@ export class RedditDiscoveryRunner {
     try {
       // Insert one by one to match ACTUAL schema
       let successCount = 0;
+      let skippedCount = 0;
       
       for (const post of posts) {
         try {
-          // Match ACTUAL database schema
-          const subredditRaw = post.raw?.subreddit || post.sourceContext.replace('r/', '');
-          const subreddit = String(subredditRaw);
+          // Extract subreddit from raw data
+          const subredditRaw = post.raw?.subreddit;
+          
+          // CRITICAL VALIDATION: Skip post if subreddit is missing or invalid
+          if (!subredditRaw || typeof subredditRaw !== 'string' || subredditRaw.trim() === '') {
+            skippedCount++;
+            console.log(`[RedditDiscoveryRunner] Skipped post ${post.id}: subreddit missing or invalid`);
+            console.log(`[RedditDiscoveryRunner] Post details - url: ${post.url}, raw keys: ${Object.keys(post.raw || {}).join(', ')}`);
+            continue;
+          }
+
+          const subreddit = String(subredditRaw).toLowerCase().trim();
+          
+          // Additional validation: Verify URL contains the subreddit
+          if (!post.url.includes(`/r/${subreddit}/`)) {
+            skippedCount++;
+            console.log(`[RedditDiscoveryRunner] Skipped post ${post.id}: URL mismatch - subreddit="${subreddit}", url="${post.url}"`);
+            continue;
+          }
+
           const sourceId = post.id; // Reddit post ID
           // Include source_id to ensure uniqueness even with empty content or cross-posted content
           const contentHash = createHash('md5').update(`${post.content || ''}|${post.id}`).digest('hex');
           const dedupKey = `reddit_${sourceId}`;
+          
+          // Ensure author is never "unknown" - use null or "[deleted]"
+          let author = post.author || null;
+          if (author === 'unknown') {
+            author = '[deleted]';
+          }
           
           const item = {
             run_id: runId,
@@ -292,7 +316,7 @@ export class RedditDiscoveryRunner {
             source_id: sourceId,
             title: post.title || '',
             content: (post.content || '').substring(0, 10000),
-            author: post.author || null,
+            author: author,
             url: post.url,
             created_at: post.createdAt.toISOString(),
             content_hash: contentHash,
@@ -326,6 +350,9 @@ export class RedditDiscoveryRunner {
       }
       
       console.log(`[RedditDiscoveryRunner] ✅ Successfully inserted ${successCount}/${posts.length} items into normalized_items`);
+      if (skippedCount > 0) {
+        console.log(`[RedditDiscoveryRunner] ⚠️ Skipped ${skippedCount} items (invalid subreddit or URL mismatch)`);
+      }
       return successCount;
 
     } catch (err) {

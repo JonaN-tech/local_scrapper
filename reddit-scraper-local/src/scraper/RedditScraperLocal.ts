@@ -152,6 +152,7 @@ export class RedditScraperLocal implements PlatformScraper {
     let postsInWindow = 0;
     let postsFiltered = 0;
     let matchedCount = 0;
+    let skippedNoSubreddit = 0;
 
     for (const child of response.data.data.children) {
       const post = child.data;
@@ -178,6 +179,19 @@ export class RedditScraperLocal implements PlatformScraper {
         continue; // No keyword match, skip
       }
 
+      // CRITICAL: Extract subreddit using canonical logic
+      const extractedSubreddit = this.extractSubreddit(post);
+      if (!extractedSubreddit) {
+        // Skip post if subreddit cannot be determined
+        skippedNoSubreddit++;
+        console.log(`[RedditScraperLocal] Skipped post ${post.id}: subreddit could not be resolved`);
+        console.log(`[RedditScraperLocal] Post details - permalink: ${post.permalink}, available fields: ${Object.keys(post).join(', ')}`);
+        continue;
+      }
+
+      // Extract author with proper handling
+      const author = this.extractAuthor(post);
+
       matchedCount++;
       posts.push({
         id: post.id,
@@ -185,14 +199,14 @@ export class RedditScraperLocal implements PlatformScraper {
         title: post.title,
         content: post.selftext || '',
         url: `https://reddit.com${post.permalink}`,
-        author: post.author !== '[deleted]' ? post.author : undefined,
-        sourceContext: `r/${subreddit}`,
+        author: author,
+        sourceContext: `r/${extractedSubreddit}`,
         createdAt: postDate,
         keywordsMatched,
         raw: {
           score: post.score,
           numComments: post.num_comments,
-          subreddit,
+          subreddit: extractedSubreddit,
         },
       });
       postsInWindow++;
@@ -202,7 +216,61 @@ export class RedditScraperLocal implements PlatformScraper {
       console.log(`[RedditScraperLocal] r/${subreddit}: ${postsInWindow} posts matched keywords`);
     }
 
+    if (skippedNoSubreddit > 0) {
+      console.log(`[RedditScraperLocal] r/${subreddit}: Skipped ${skippedNoSubreddit} posts (subreddit unresolvable)`);
+    }
+
     return posts;
+  }
+
+  /**
+   * Canonical subreddit extraction logic
+   * Extracts subreddit in this order (FIRST MATCH WINS):
+   * 1. post.subreddit (direct field)
+   * 2. Parse from permalink (/r/{subreddit}/comments/{id}/)
+   * Returns null if subreddit cannot be determined
+   */
+  private extractSubreddit(post: any): string | null {
+    // Try direct field first
+    if (post.subreddit && typeof post.subreddit === 'string') {
+      return this.normalizeSubreddit(post.subreddit);
+    }
+
+    // Try parsing from permalink
+    if (post.permalink && typeof post.permalink === 'string') {
+      const match = post.permalink.match(/^\/r\/([^\/]+)\//);
+      if (match && match[1]) {
+        return this.normalizeSubreddit(match[1]);
+      }
+    }
+
+    // Could not determine subreddit
+    return null;
+  }
+
+  /**
+   * Normalize subreddit name:
+   * - Lowercase
+   * - Remove r/ prefix if present
+   * - Trim whitespace
+   */
+  private normalizeSubreddit(subreddit: string): string {
+    return subreddit
+      .toLowerCase()
+      .trim()
+      .replace(/^r\//i, '');
+  }
+
+  /**
+   * Extract author with proper handling
+   * Returns "[deleted]" for deleted accounts (Reddit convention)
+   * Never returns undefined or "unknown"
+   */
+  private extractAuthor(post: any): string {
+    if (!post.author || post.author === '[deleted]') {
+      return '[deleted]';
+    }
+    return post.author;
   }
 
   /**
