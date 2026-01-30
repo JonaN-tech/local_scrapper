@@ -292,8 +292,9 @@ export class RedditDiscoveryRunner {
 
           const subreddit = String(subredditRaw).toLowerCase().trim();
           
-          // Additional validation: Verify URL contains the subreddit
-          if (!post.url.includes(`/r/${subreddit}/`)) {
+          // Additional validation: Verify URL contains the subreddit (case-insensitive)
+          const urlLower = post.url.toLowerCase();
+          if (!urlLower.includes(`/r/${subreddit}/`)) {
             skippedCount++;
             console.log(`[RedditDiscoveryRunner] Skipped post ${post.id}: URL mismatch - subreddit="${subreddit}", url="${post.url}"`);
             continue;
