@@ -146,6 +146,7 @@ export class RedditScraperLocal implements PlatformScraper {
     }
 
     if (!response?.data?.data?.children) {
+      console.log(`[RedditScraperLocal] r/${subreddit}: No children in response`);
       return posts;
     }
 
@@ -153,6 +154,11 @@ export class RedditScraperLocal implements PlatformScraper {
     let postsFiltered = 0;
     let matchedCount = 0;
     let skippedNoSubreddit = 0;
+    let skippedDeleted = 0;
+    let skippedTimeWindow = 0;
+    let skippedNoKeyword = 0;
+
+    console.log(`[RedditScraperLocal] r/${subreddit}: Processing ${response.data.data.children.length} posts from API`);
 
     for (const child of response.data.data.children) {
       const post = child.data;
@@ -161,11 +167,13 @@ export class RedditScraperLocal implements PlatformScraper {
       // Check time window
       if (!TimeWindow.isWithinWindow(postDate, timeWindow.from, timeWindow.to)) {
         postsFiltered++;
+        skippedTimeWindow++;
         continue;
       }
 
       // Filter deleted/removed posts
       if (post.selftext === '[deleted]' || post.title === '[deleted]' || post.removed_by_category) {
+        skippedDeleted++;
         continue;
       }
 
@@ -176,6 +184,7 @@ export class RedditScraperLocal implements PlatformScraper {
       );
 
       if (keywordsMatched.length === 0) {
+        skippedNoKeyword++;
         continue; // No keyword match, skip
       }
 
@@ -184,8 +193,13 @@ export class RedditScraperLocal implements PlatformScraper {
       if (!extractedSubreddit) {
         // Skip post if subreddit cannot be determined
         skippedNoSubreddit++;
-        console.log(`[RedditScraperLocal] Skipped post ${post.id}: subreddit could not be resolved`);
-        console.log(`[RedditScraperLocal] Post details - permalink: ${post.permalink}, available fields: ${Object.keys(post).join(', ')}`);
+        console.warn(`[RedditScraperLocal] ⚠️ SKIPPED POST - No subreddit`);
+        console.warn(`[RedditScraperLocal]   Post ID: ${post.id}`);
+        console.warn(`[RedditScraperLocal]   Title: ${post.title?.substring(0, 60)}...`);
+        console.warn(`[RedditScraperLocal]   Permalink: ${post.permalink}`);
+        console.warn(`[RedditScraperLocal]   Has post.subreddit: ${!!post.subreddit}`);
+        console.warn(`[RedditScraperLocal]   post.subreddit value: ${post.subreddit}`);
+        console.warn(`[RedditScraperLocal]   Available fields: ${Object.keys(post).filter(k => k.includes('sub') || k.includes('name')).join(', ')}`);
         continue;
       }
 
@@ -212,13 +226,13 @@ export class RedditScraperLocal implements PlatformScraper {
       postsInWindow++;
     }
 
-    if (postsInWindow > 0) {
-      console.log(`[RedditScraperLocal] r/${subreddit}: ${postsInWindow} posts matched keywords`);
-    }
-
-    if (skippedNoSubreddit > 0) {
-      console.log(`[RedditScraperLocal] r/${subreddit}: Skipped ${skippedNoSubreddit} posts (subreddit unresolvable)`);
-    }
+    // Enhanced summary logging
+    console.log(`[RedditScraperLocal] r/${subreddit}: SUMMARY`);
+    console.log(`[RedditScraperLocal]   ✅ Matched & extracted: ${postsInWindow} posts`);
+    if (skippedTimeWindow > 0) console.log(`[RedditScraperLocal]   ⏰ Skipped (time window): ${skippedTimeWindow}`);
+    if (skippedDeleted > 0) console.log(`[RedditScraperLocal]   🗑️ Skipped (deleted): ${skippedDeleted}`);
+    if (skippedNoKeyword > 0) console.log(`[RedditScraperLocal]   🔍 Skipped (no keyword match): ${skippedNoKeyword}`);
+    if (skippedNoSubreddit > 0) console.log(`[RedditScraperLocal]   ⚠️ Skipped (NO SUBREDDIT): ${skippedNoSubreddit} ⚠️`);
 
     return posts;
   }
