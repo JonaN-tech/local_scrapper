@@ -14,11 +14,9 @@
 ```sql
 -- Step 1: Try to recover posts from their URLs
 WITH recoverable AS (
-  SELECT 
+  SELECT
     id,
-    url,
-    LOWER(TRIM(SUBSTRING(url FROM '/r/([^/]+)/'))) as extracted_subreddit,
-    metadata
+    LOWER(TRIM(SUBSTRING(url FROM '/r/([^/]+)/'))) as extracted_subreddit
   FROM normalized_items
   WHERE source_platform = 'reddit'
     AND (
@@ -29,9 +27,9 @@ WITH recoverable AS (
     AND url ~* '/r/[^/]+/'
 )
 UPDATE normalized_items
-SET 
+SET
   metadata = jsonb_set(
-    metadata,
+    normalized_items.metadata,
     '{subreddit}',
     to_jsonb(recoverable.extracted_subreddit)
   ),
@@ -53,7 +51,7 @@ WHERE source_platform = 'reddit'
   );
 
 -- Step 3: Verify cleanup
-SELECT 
+SELECT
     'Remaining unknown posts' as status,
     COUNT(*) as count
 FROM normalized_items
