@@ -154,6 +154,7 @@ export class RedditScraperLocal implements PlatformScraper {
     let postsFiltered = 0;
     let matchedCount = 0;
     let skippedNoSubreddit = 0;
+    let skippedCrossPost = 0;
     let skippedDeleted = 0;
     let skippedTimeWindow = 0;
     let skippedNoKeyword = 0;
@@ -188,20 +189,36 @@ export class RedditScraperLocal implements PlatformScraper {
         continue; // No keyword match, skip
       }
 
-      // CRITICAL: Extract subreddit using canonical logic
-      const extractedSubreddit = this.extractSubreddit(post);
-      if (!extractedSubreddit) {
-        // Skip post if subreddit cannot be determined
-        skippedNoSubreddit++;
-        console.warn(`[RedditScraperLocal] ⚠️ SKIPPED POST - No subreddit`);
-        console.warn(`[RedditScraperLocal]   Post ID: ${post.id}`);
-        console.warn(`[RedditScraperLocal]   Title: ${post.title?.substring(0, 60)}...`);
-        console.warn(`[RedditScraperLocal]   Permalink: ${post.permalink}`);
-        console.warn(`[RedditScraperLocal]   Has post.subreddit: ${!!post.subreddit}`);
-        console.warn(`[RedditScraperLocal]   post.subreddit value: ${post.subreddit}`);
-        console.warn(`[RedditScraperLocal]   Available fields: ${Object.keys(post).filter(k => k.includes('sub') || k.includes('name')).join(', ')}`);
+      // CRITICAL: Extract subreddit using canonical logic (permalink is source of truth)
+      const extraction = this.extractSubreddit(post);
+      
+      if (!extraction.subreddit) {
+        if (extraction.isCrossPost) {
+          // This is a cross-subreddit post - skip it
+          skippedCrossPost++;
+          const apiSubreddit = post.subreddit ? this.normalizeSubreddit(post.subreddit) : 'unknown';
+          const permalinkMatch = post.permalink?.match(/^\/r\/([^\/]+)\//);
+          const permalinkSubreddit = permalinkMatch ? permalinkMatch[1].toLowerCase() : 'unknown';
+          
+          console.log(`[RedditScraperLocal] ℹ️ Skipped cross-subreddit post`);
+          console.log(`[RedditScraperLocal]   Post ID: ${post.id}`);
+          console.log(`[RedditScraperLocal]   Title: ${post.title?.substring(0, 50)}...`);
+          console.log(`[RedditScraperLocal]   Requested: r/${subreddit}`);
+          console.log(`[RedditScraperLocal]   API says: r/${apiSubreddit}`);
+          console.log(`[RedditScraperLocal]   Permalink says: r/${permalinkSubreddit}`);
+          console.log(`[RedditScraperLocal]   → Canonical subreddit mismatch - skipping`);
+        } else {
+          // Could not extract subreddit at all
+          skippedNoSubreddit++;
+          console.warn(`[RedditScraperLocal] ⚠️ SKIPPED POST - No subreddit extractable`);
+          console.warn(`[RedditScraperLocal]   Post ID: ${post.id}`);
+          console.warn(`[RedditScraperLocal]   Permalink: ${post.permalink}`);
+          console.warn(`[RedditScraperLocal]   Has post.subreddit: ${!!post.subreddit}`);
+        }
         continue;
       }
+
+      const extractedSubreddit = extraction.subreddit;
 
       // Extract author with proper handling
       const author = this.extractAuthor(post);
@@ -232,6 +249,7 @@ export class RedditScraperLocal implements PlatformScraper {
     if (skippedTimeWindow > 0) console.log(`[RedditScraperLocal]   ⏰ Skipped (time window): ${skippedTimeWindow}`);
     if (skippedDeleted > 0) console.log(`[RedditScraperLocal]   🗑️ Skipped (deleted): ${skippedDeleted}`);
     if (skippedNoKeyword > 0) console.log(`[RedditScraperLocal]   🔍 Skipped (no keyword match): ${skippedNoKeyword}`);
+    if (skippedCrossPost > 0) console.log(`[RedditScraperLocal]   🔀 Skipped (cross-subreddit posts): ${skippedCrossPost}`);
     if (skippedNoSubreddit > 0) console.log(`[RedditScraperLocal]   ⚠️ Skipped (NO SUBREDDIT): ${skippedNoSubreddit} ⚠️`);
 
     return posts;
@@ -239,27 +257,40 @@ export class RedditScraperLocal implements PlatformScraper {
 
   /**
    * Canonical subreddit extraction logic
-   * Extracts subreddit in this order (FIRST MATCH WINS):
-   * 1. post.subreddit (direct field)
-   * 2. Parse from permalink (/r/{subreddit}/comments/{id}/)
-   * Returns null if subreddit cannot be determined
+   * PERMALINK IS THE SOURCE OF TRUTH - Reddit API can return cross-subreddit posts
+   *
+   * Extracts subreddit in this order:
+   * 1. Parse from permalink (/r/{subreddit}/comments/{id}/) - CANONICAL
+   * 2. Verify against post.subreddit field if available
+   * 3. Return null if mismatch or missing
    */
-  private extractSubreddit(post: any): string | null {
-    // Try direct field first
-    if (post.subreddit && typeof post.subreddit === 'string') {
-      return this.normalizeSubreddit(post.subreddit);
-    }
-
-    // Try parsing from permalink
+  private extractSubreddit(post: any): { subreddit: string | null; isCrossPost: boolean } {
+    // ALWAYS extract from permalink first - this is the canonical source
+    let permalinkSubreddit: string | null = null;
     if (post.permalink && typeof post.permalink === 'string') {
       const match = post.permalink.match(/^\/r\/([^\/]+)\//);
       if (match && match[1]) {
-        return this.normalizeSubreddit(match[1]);
+        permalinkSubreddit = this.normalizeSubreddit(match[1]);
       }
     }
 
-    // Could not determine subreddit
-    return null;
+    // If no permalink subreddit, cannot proceed
+    if (!permalinkSubreddit) {
+      return { subreddit: null, isCrossPost: false };
+    }
+
+    // Verify against post.subreddit field (if available)
+    if (post.subreddit && typeof post.subreddit === 'string') {
+      const apiSubreddit = this.normalizeSubreddit(post.subreddit);
+      
+      // If they don't match, this is a cross-subreddit post
+      if (apiSubreddit !== permalinkSubreddit) {
+        return { subreddit: null, isCrossPost: true };
+      }
+    }
+
+    // All checks passed - return canonical subreddit from permalink
+    return { subreddit: permalinkSubreddit, isCrossPost: false };
   }
 
   /**

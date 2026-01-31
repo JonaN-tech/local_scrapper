@@ -97,6 +97,7 @@ npm run dev
 [RedditScraperLocal] Skipped post abc123: subreddit could not be resolved  ⚠️ Investigation needed
 ```
 
+
 **If you see many "Skipped" messages:**
 
 This means Reddit's API response is missing data. Let's add debug logging to see the raw response.
