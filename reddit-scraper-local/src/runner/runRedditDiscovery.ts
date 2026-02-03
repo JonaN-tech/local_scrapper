@@ -4,6 +4,22 @@ import { NormalizedPost } from '../core/NormalizedPost';
 import { supabase, isDbEnabled } from '../supabase';
 import { createHash } from 'crypto';
 
+/**
+ * Validates if a Reddit item is valid for insertion.
+ * Rejects items with:
+ * - null/empty/unknown author
+ * - null URL
+ * - /r/unknown URLs
+ * - Invalid Reddit post permalink format
+ */
+function isValidRedditItem(item: NormalizedPost): boolean {
+  if (!item.author || item.author === 'unknown') return false;
+  if (!item.url) return false;
+  if (item.url.includes('/r/unknown')) return false;
+  if (!/reddit\.com\/r\/[^/]+\/comments\/[a-z0-9]+/i.test(item.url)) return false;
+  return true;
+}
+
 export interface RedditDiscoveryRequest {
   source: 'manual' | 'schedule';
   scheduleId?: string;
@@ -279,6 +295,17 @@ export class RedditDiscoveryRunner {
       
       for (const post of posts) {
         try {
+          // Hard validation gate: Skip invalid items before any processing
+          if (!isValidRedditItem(post)) {
+            console.warn(`[REDDIT] Skipping invalid item`, {
+              title: post.title,
+              author: post.author,
+              url: post.url
+            });
+            skippedCount++;
+            continue;
+          }
+
           // Extract subreddit from raw data
           const subredditRaw = post.raw?.subreddit;
           
