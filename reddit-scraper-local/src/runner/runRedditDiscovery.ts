@@ -1,4 +1,4 @@
-import { RedditScraperLocal } from '../scraper/RedditScraperLocal';
+﻿import { RedditScraperLocal } from '../scraper/RedditScraperLocal';
 import { TimeWindow } from '../utils/timeWindow';
 import { NormalizedPost } from '../core/NormalizedPost';
 import { supabase, isDbEnabled } from '../supabase';
@@ -34,15 +34,36 @@ export interface RedditDiscoveryResult {
   status: 'completed' | 'failed';
   postsFound: number;
   error?: string;
+  /** Subreddits that were blocked (403) during this run */
+  blockedSubreddits?: string[];
+  /** Subreddits that had other errors (rate limit, network, etc.) */
+  failedSubreddits?: string[];
+  /** Human-readable message about any subreddit failures */
+  subredditWarnings?: string[];
 }
 
 export class RedditDiscoveryRunner {
   /**
-   * Run Reddit discovery and persist results to Supabase
+   * Run Reddit discovery and persist results to Supabase.
+   * Individual subreddit failures do NOT abort the whole run.
    */
   async run(request: RedditDiscoveryRequest): Promise<RedditDiscoveryResult> {
     const startTime = Date.now();
     let runId: string | null = request.runId || null;
+
+    // Log environment variable status at startup (values are NOT logged)
+    console.log(`[RedditDiscoveryRunner] Environment check:`);
+    console.log(`[RedditDiscoveryRunner]   SUPABASE_URL          : ${Boolean(process.env['SUPABASE_URL'])}`);
+    console.log(`[RedditDiscoveryRunner]   SUPABASE_SERVICE_ROLE_KEY: ${Boolean(process.env['SUPABASE_SERVICE_ROLE_KEY'])}`);
+    console.log(`[RedditDiscoveryRunner]   REDDIT_CLIENT_ID      : ${Boolean(process.env['REDDIT_CLIENT_ID'])}`);
+    console.log(`[RedditDiscoveryRunner]   REDDIT_CLIENT_SECRET  : ${Boolean(process.env['REDDIT_CLIENT_SECRET'])}`);
+    console.log(`[RedditDiscoveryRunner]   REDDIT_USER_AGENT     : ${Boolean(process.env['REDDIT_USER_AGENT'])}`);
+    if (!process.env['REDDIT_CLIENT_ID']) {
+      console.warn(`[RedditDiscoveryRunner] WARNING: REDDIT_CLIENT_ID is missing.`);
+      console.warn(`[RedditDiscoveryRunner]   Reddit frequently blocks unauthenticated requests from`);
+      console.warn(`[RedditDiscoveryRunner]   cloud/datacenter IPs (Render, Vercel). 403 errors likely.`);
+      console.warn(`[RedditDiscoveryRunner]   Add REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET to Render env vars.`);
+    }
 
     // Clear start logging with all parameters
     console.log(`[SCRAPER_START]`);
@@ -94,7 +115,7 @@ export class RedditDiscoveryRunner {
             .single();
 
           if (existingRun) {
-            console.log(`[RedditDiscoveryRunner] ✅ Using provided runId: ${runId}`);
+            console.log(`[RedditDiscoveryRunner] Using provided runId: ${runId}`);
           } else {
             console.error(`[RedditDiscoveryRunner] ERROR: Provided runId not found in database: ${runId}`);
             return {
@@ -105,7 +126,7 @@ export class RedditDiscoveryRunner {
             };
           }
         } else {
-          console.log(`[RedditDiscoveryRunner] ✅ Using provided runId: ${runId} (DB disabled)`);
+          console.log(`[RedditDiscoveryRunner] Using provided runId: ${runId} (DB disabled)`);
         }
       } else if (isDbEnabled && supabase) {
         // Only create run if runId was NOT provided
@@ -136,8 +157,6 @@ export class RedditDiscoveryRunner {
         // If platforms_status column doesn't exist, retry without it (backward compatibility)
         if (error && error.message?.includes('platforms_status')) {
           console.warn(`[RedditDiscoveryRunner] platforms_status column not found, retrying without it...`);
-
-          // Remove platforms_status and retry
           const { platforms_status, ...payloadWithoutPlatforms } = runPayload;
           runPayload = payloadWithoutPlatforms;
 
@@ -156,7 +175,7 @@ export class RedditDiscoveryRunner {
           console.error(`[RedditDiscoveryRunner] Error details:`, JSON.stringify(error));
         } else {
           runId = run.id;
-          console.log(`[RedditDiscoveryRunner] ✅ Run created: ${runId}`);
+          console.log(`[RedditDiscoveryRunner] Run created: ${runId}`);
         }
       } else {
         console.log(`[RedditDiscoveryRunner] DB disabled, no runId provided - running in mock mode`);
@@ -172,13 +191,30 @@ export class RedditDiscoveryRunner {
 
       console.log(`[RedditDiscoveryRunner] Starting Reddit scrape for ${subreddits.length} subreddits...`);
       const posts = await scraper.fetchPosts({
-        subreddits: subreddits,  // Use EXACTLY the requested subreddits
+        subreddits: subreddits,
         keywords: keywords,
         timeWindow,
         limit: 50,
       });
 
       console.log(`[RedditDiscoveryRunner] Scraped ${posts.length} posts`);
+
+      // Gather per-subreddit failure info from rateLimiter stats
+      // (scraper logs them but we also surface them in the result)
+      const rateLimiterStats = (scraper as any).rateLimiter?.getStats?.() as any;
+      const blockedSubreddits: string[] = rateLimiterStats?.blockedSubreddits || [];
+
+      // Build human-readable warnings
+      const subredditWarnings: string[] = [];
+      if (blockedSubreddits.length > 0) {
+        for (const sr of blockedSubreddits) {
+          subredditWarnings.push(
+            `r/${sr} was skipped because Reddit returned 403 Forbidden. ` +
+            `This is likely caused by Reddit blocking Render/datacenter IPs. ` +
+            `Other selected subreddits were still processed.`
+          );
+        }
+      }
 
       // Insert posts into normalized_items (only if we have a valid runId)
       if (isDbEnabled && supabase && runId && posts.length > 0) {
@@ -192,21 +228,19 @@ export class RedditDiscoveryRunner {
       // Update run record on completion
       if (isDbEnabled && supabase && runId) {
         console.log(`[RedditDiscoveryRunner] Updating run to completed...`);
-        
-        // Try with platforms_status first
+
         let updatePayload: any = {
           status: 'completed',
           total_results_count: posts.length,
           platforms_status: { reddit: 'completed' },
           updated_at: new Date().toISOString(),
         };
-        
+
         let { error: updateError } = await supabase
           .from('runs')
           .update(updatePayload)
           .eq('id', runId);
 
-        // If platforms_status doesn't exist, retry without it
         if (updateError && updateError.message?.includes('platforms_status')) {
           console.warn(`[RedditDiscoveryRunner] Retrying update without platforms_status...`);
           const { platforms_status, ...payloadWithoutPlatforms } = updatePayload;
@@ -220,17 +254,24 @@ export class RedditDiscoveryRunner {
         if (updateError) {
           console.error(`[RedditDiscoveryRunner] Run update failed:`, updateError.message);
         } else {
-          console.log(`[RedditDiscoveryRunner] ✅ Run completed`);
+          console.log(`[RedditDiscoveryRunner] Run completed`);
         }
       }
 
       console.log(`[RedditDiscoveryRunner] Discovery completed successfully`);
       console.log(`[RedditDiscoveryRunner] Duration: ${Date.now() - startTime}ms`);
 
+      if (subredditWarnings.length > 0) {
+        console.warn(`[RedditDiscoveryRunner] Subreddit warnings:`);
+        subredditWarnings.forEach(w => console.warn(`[RedditDiscoveryRunner]   ${w}`));
+      }
+
       return {
         runId,
         status: 'completed',
         postsFound: posts.length,
+        blockedSubreddits: blockedSubreddits.length > 0 ? blockedSubreddits : undefined,
+        subredditWarnings: subredditWarnings.length > 0 ? subredditWarnings : undefined,
       };
 
     } catch (err) {
@@ -241,21 +282,19 @@ export class RedditDiscoveryRunner {
       // Update run record on failure
       if (isDbEnabled && supabase && runId) {
         console.log(`[RedditDiscoveryRunner] Updating run to failed...`);
-        
-        // Try with platforms_status first
+
         let updatePayload: any = {
           status: 'failed',
           error_message: error.message,
           platforms_status: { reddit: 'failed' },
           updated_at: new Date().toISOString(),
         };
-        
+
         let { error: updateError } = await supabase
           .from('runs')
           .update(updatePayload)
           .eq('id', runId);
 
-        // If platforms_status doesn't exist, retry without it
         if (updateError && updateError.message?.includes('platforms_status')) {
           console.warn(`[RedditDiscoveryRunner] Retrying update without platforms_status...`);
           const { platforms_status, ...payloadWithoutPlatforms } = updatePayload;
@@ -287,12 +326,11 @@ export class RedditDiscoveryRunner {
     if (!supabase || posts.length === 0) return 0;
 
     console.log(`[RedditDiscoveryRunner] Inserting ${posts.length} items into normalized_items...`);
-    
+
     try {
-      // Insert one by one to match ACTUAL schema
       let successCount = 0;
       let skippedCount = 0;
-      
+
       for (const post of posts) {
         try {
           // Hard validation gate: Skip invalid items before any processing
@@ -308,7 +346,7 @@ export class RedditDiscoveryRunner {
 
           // Extract subreddit from raw data
           const subredditRaw = post.raw?.subreddit;
-          
+
           // CRITICAL VALIDATION: Skip post if subreddit is missing or invalid
           if (!subredditRaw || typeof subredditRaw !== 'string' || subredditRaw.trim() === '') {
             skippedCount++;
@@ -318,7 +356,7 @@ export class RedditDiscoveryRunner {
           }
 
           const subreddit = String(subredditRaw).toLowerCase().trim();
-          
+
           // Additional validation: Verify URL contains the subreddit (case-insensitive)
           const urlLower = post.url.toLowerCase();
           if (!urlLower.includes(`/r/${subreddit}/`)) {
@@ -327,20 +365,19 @@ export class RedditDiscoveryRunner {
             continue;
           }
 
-          const sourceId = post.id; // Reddit post ID
-          // Include source_id to ensure uniqueness even with empty content or cross-posted content
+          const sourceId = post.id;
           const contentHash = createHash('md5').update(`${post.content || ''}|${post.id}`).digest('hex');
           const dedupKey = `reddit_${sourceId}`;
-          
+
           // Ensure author is never "unknown" - use null or "[deleted]"
           let author = post.author || null;
           if (author === 'unknown') {
             author = '[deleted]';
           }
-          
+
           const item = {
             run_id: runId,
-            source_platform: 'reddit', // USER-DEFINED enum type
+            source_platform: 'reddit',
             source_id: sourceId,
             title: post.title || '',
             content: (post.content || '').substring(0, 10000),
@@ -361,13 +398,12 @@ export class RedditDiscoveryRunner {
           const { error: insertError } = await supabase
             .from('normalized_items')
             .insert(item);
-          
+
           if (!insertError) {
             successCount++;
           } else {
             console.error(`[RedditDiscoveryRunner] Failed to insert post ${sourceId}:`, insertError.message);
             if (successCount === 0) {
-              // Log first error details for debugging
               console.error(`[RedditDiscoveryRunner] Error details:`, JSON.stringify(insertError));
               console.error(`[RedditDiscoveryRunner] Sample item:`, JSON.stringify(item, null, 2));
             }
@@ -376,10 +412,10 @@ export class RedditDiscoveryRunner {
           console.error(`[RedditDiscoveryRunner] Error processing post:`, singleError);
         }
       }
-      
-      console.log(`[RedditDiscoveryRunner] ✅ Successfully inserted ${successCount}/${posts.length} items into normalized_items`);
+
+      console.log(`[RedditDiscoveryRunner] Successfully inserted ${successCount}/${posts.length} items into normalized_items`);
       if (skippedCount > 0) {
-        console.log(`[RedditDiscoveryRunner] ⚠️ Skipped ${skippedCount} items (invalid subreddit or URL mismatch)`);
+        console.log(`[RedditDiscoveryRunner] Skipped ${skippedCount} items (invalid subreddit or URL mismatch)`);
       }
       return successCount;
 

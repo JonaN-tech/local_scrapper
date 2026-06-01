@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import cors from 'cors';
 import { RedditScraperLocal } from '../scraper/RedditScraperLocal';
 import { RedditDiscoveryRunner, RedditDiscoveryRequest } from '../runner/runRedditDiscovery';
@@ -112,9 +112,8 @@ app.post('/run/reddit', async (req, res) => {
   }
 
   try {
-    // CRITICAL: Pass runId to the request
     const request: RedditDiscoveryRequest = {
-      runId,  // <-- MUST be forwarded
+      runId,
       source,
       scheduleId,
       keywords,
@@ -133,11 +132,18 @@ app.post('/run/reddit', async (req, res) => {
 
     console.log(`[Server] Run completed - RunId: ${result.runId}, Posts: ${result.postsFound}, Status: ${result.status}`);
 
+    if (result.blockedSubreddits && result.blockedSubreddits.length > 0) {
+      console.warn(`[Server] Blocked subreddits in this run: ${result.blockedSubreddits.join(', ')}`);
+    }
+
     return res.json({
       runId: result.runId,
       status: result.status,
       postsFound: result.postsFound,
       error: result.error,
+      // Surface skipped subreddits and warnings to the caller
+      blockedSubreddits: result.blockedSubreddits,
+      subredditWarnings: result.subredditWarnings,
     });
   } catch (error) {
     console.error('[Server] Error during Reddit discovery run:', error);
